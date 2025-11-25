@@ -1,0 +1,36 @@
+{% extends "base.html" %} {% block content %}
+<h2 class="text-xl font-semibold text-slate-800 mb-4">Логи спроб входу</h2>
+
+<table
+  class="w-full text-xs text-left border border-slate-200 rounded-lg overflow-hidden"
+>
+  <thead class="bg-slate-50">
+    <tr>
+      <th class="px-2 py-2 border-b">ID</th>
+      <th class="px-2 py-2 border-b">Username/Email</th>
+      <th class="px-2 py-2 border-b">Email користувача</th>
+      <th class="px-2 py-2 border-b">IP</th>
+      <th class="px-2 py-2 border-b">Час</th>
+      <th class="px-2 py-2 border-b">Статус</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for log in logs %}
+    <tr class="hover:bg-slate-50">
+      <td class="px-2 py-1 border-b">{{ log['id'] }}</td>
+      <td class="px-2 py-1 border-b">{{ log['username_or_email'] }}</td>
+      <td class="px-2 py-1 border-b">{{ log['email'] or '' }}</td>
+      <td class="px-2 py-1 border-b">{{ log['ip_address'] }}</td>
+      <td class="px-2 py-1 border-b">{{ log['timestamp'] }}</td>
+      <td class="px-2 py-1 border-b">
+        {% if log['success'] %}
+        <span class="text-green-700">OK</span>
+        {% else %}
+        <span class="text-red-700">FAIL</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

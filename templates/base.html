@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="uk">
+  <head>
+    <meta charset="utf-8" />
+    <title>Secure Accounts</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+  </head>
+  <body class="bg-slate-100 min-h-screen">
+    <nav class="bg-white shadow-sm">
+      <div
+        class="max-w-4xl mx-auto px-4 py-3 flex justify-between items-center"
+      >
+        <a
+          href="{{ url_for('index') }}"
+          class="text-lg font-semibold text-slate-800"
+          >SecureAccounts</a
+        >
+        <div class="space-x-4">
+          {% if current_user.is_authenticated %}
+          <a
+            href="{{ url_for('profile') }}"
+            class="text-slate-700 hover:text-blue-600"
+            >Профіль</a
+          >
+          <a
+            href="{{ url_for('admin_logins') }}"
+            class="text-slate-700 hover:text-blue-600"
+            >Логи</a
+          >
+          <a
+            href="{{ url_for('logout') }}"
+            class="text-slate-700 hover:text-blue-600"
+            >Вихід</a
+          >
+          {% else %}
+          <a
+            href="{{ url_for('login') }}"
+            class="text-slate-700 hover:text-blue-600"
+            >Вхід</a
+          >
+          <a
+            href="{{ url_for('register') }}"
+            class="text-slate-700 hover:text-blue-600"
+            >Реєстрація</a
+          >
+          {% endif %}
+        </div>
+      </div>
+    </nav>
+
+    <main class="max-w-md mx-auto mt-10">
+      {% with messages = get_flashed_messages(with_categories=true) %} {% if
+      messages %}
+      <div class="space-y-2 mb-4">
+        {% for category, message in messages %} {% set color = 'blue' %} {% if
+        category == 'success' %}{% set color = 'green' %} {% elif category ==
+        'danger' %}{% set color = 'red' %} {% elif category == 'warning' %}{%
+        set color = 'yellow' %} {% endif %}
+        <div
+          class="border border-{{color}}-200 bg-{{color}}-50 text-{{color}}-800 px-4 py-3 rounded-lg text-sm"
+        >
+          {{ message }}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %} {% endwith %}
+
+      <div class="bg-white shadow-md rounded-xl p-6">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </body>
+</html>

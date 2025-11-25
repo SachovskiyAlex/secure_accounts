@@ -1,0 +1,50 @@
+{% extends "base.html" %} {% block content %}
+<h2 class="text-xl font-semibold text-slate-800 mb-4">Вхід</h2>
+
+<form method="post" class="space-y-3">
+  <div>
+    <label class="block text-sm font-medium text-slate-700"
+      >Email або Username</label
+    >
+    <input
+      type="text"
+      name="username_or_email"
+      value="{{ username_or_email or '' }}"
+      required
+      class="mt-1 w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+    />
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Пароль</label>
+    <input
+      type="password"
+      name="password"
+      required
+      class="mt-1 w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+    />
+  </div>
+
+  <button
+    type="submit"
+    class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+  >
+    Увійти
+  </button>
+</form>
+
+<div class="mt-4 flex justify-between text-xs text-slate-500">
+  <a href="{{ url_for('forgot_password') }}" class="hover:text-blue-600"
+    >Забули пароль?</a
+  >
+</div>
+
+<hr class="my-4" />
+
+<a
+  href="{{ url_for('login_google') }}"
+  class="w-full inline-flex items-center justify-center px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-700 hover:bg-slate-50"
+>
+  Увійти через Google
+</a>
+{% endblock %}

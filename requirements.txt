@@ -1,0 +1,7 @@
+flask
+flask-bcrypt
+flask-login
+itsdangerous
+authlib
+requests
+gunicorn
