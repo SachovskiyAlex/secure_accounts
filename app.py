@@ -289,14 +289,16 @@ def login():
     conn.commit()
     conn.close()
 
-    if user.is_2fa_enabled:
-        code = random.randint(100000, 999999)
-        session['2fa_user_id'] = user.id
-        session['2fa_code'] = str(code)
-        session['2fa_expires'] = (datetime.now() + timedelta(minutes=5)).isoformat(timespec='seconds')
-        send_email(user.email, "Ваш 2FA код", f"Ваш код: {code}")
-        flash("Введіть 2FA код, надісланий на ваш email.", "info")
-        return redirect(url_for("two_factor"))
+   if user.is_2fa_enabled:
+    code = str(random.randint(100000, 999999))
+    user.twofa_code = code
+    user.twofa_exp = datetime.now() + timedelta(minutes=5)
+    db.session.commit()
+
+    send_email(user.email, "Ваш 2FA код", f"Ваш код: {code}")
+    flash("Введіть 2FA код, який надіслано на email.", "info")
+
+    return redirect(url_for("two_factor"))
 
     login_user(user)
     log_login_attempt(user.id, username_or_email, ip, True)
