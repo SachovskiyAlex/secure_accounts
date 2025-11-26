@@ -18,7 +18,9 @@ def init_db(path="database.db"):
         reset_token TEXT,
         reset_token_expires_at TEXT,
         oauth_provider TEXT,
-        oauth_id TEXT
+        oauth_id TEXT,
+        twofa_code TEXT,
+        twofa_exp TEXT
     );
     """)
 
