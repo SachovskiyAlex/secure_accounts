@@ -1,26 +1,31 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash
-from flask_bcrypt import Bcrypt
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
-from itsdangerous import URLSafeTimedSerializer
-from authlib.integrations.flask_client import OAuth
-import sqlite3
 import os
+import sqlite3
 import random
 import string
 from datetime import datetime, timedelta
+
 import requests
 import smtplib
 from email.message import EmailMessage
-import requests
+
+from flask import (
+    Flask, render_template, request, redirect,
+    url_for, session, flash
+)
+from flask_bcrypt import Bcrypt
+from flask_login import (
+    LoginManager, UserMixin, login_user,
+    login_required, logout_user, current_user
+)
+from authlib.integrations.flask_client import OAuth
 
 app = Flask(__name__)
 
-# ===== CONFIG =====
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev_secret_key_change_me')
 app.config['DATABASE'] = os.environ.get('DATABASE_PATH', 'database.db')
 
-app.config['GMAIL_USER'] = os.environ.get('GMAIL_USER', '')
-app.config['GMAIL_APP_PASSWORD'] = os.environ.get('GMAIL_APP_PASSWORD', '')
+app.config['SENDGRID_API_KEY'] = os.environ.get('SENDGRID_API_KEY', '')
+app.config['FROM_EMAIL'] = os.environ.get('FROM_EMAIL', '')
 
 app.config['RECAPTCHA_SITE_KEY'] = os.environ.get('RECAPTCHA_SITE_KEY', '')
 app.config['RECAPTCHA_SECRET_KEY'] = os.environ.get('RECAPTCHA_SECRET_KEY', '')
@@ -33,9 +38,8 @@ bcrypt = Bcrypt(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
-
 oauth = OAuth(app)
+google = None
 if app.config['GOOGLE_CLIENT_ID'] and app.config['GOOGLE_CLIENT_SECRET']:
     google = oauth.register(
         name='google',
@@ -44,10 +48,7 @@ if app.config['GOOGLE_CLIENT_ID'] and app.config['GOOGLE_CLIENT_SECRET']:
         server_metadata_url=app.config['GOOGLE_DISCOVERY_URL'],
         client_kwargs={'scope': 'openid email profile'}
     )
-else:
-    google = None
 
-# ===== DB HELPERS =====
 def get_db():
     conn = sqlite3.connect(app.config['DATABASE'])
     conn.row_factory = sqlite3.Row
@@ -79,7 +80,6 @@ def load_user(user_id):
         return User(row)
     return None
 
-# ===== HELPERS =====
 def password_valid(password: str) -> bool:
     if len(password) < 8:
         return False
@@ -94,9 +94,38 @@ def generate_random_token(length=32):
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
+def parse_datetime(dt_str):
+    if not dt_str:
+        return None
+    try:
+        return datetime.fromisoformat(dt_str)
+    except ValueError:
+        return None
+
+def log_login_attempt(user_id, username_or_email, ip, success):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO login_attempts (user_id, username_or_email, ip_address, timestamp, success)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, username_or_email, ip, datetime.now().isoformat(timespec='seconds'), 1 if success else 0))
+    conn.commit()
+    conn.close()
+
+def verify_recaptcha(token, remote_ip):
+    secret = app.config['RECAPTCHA_SECRET_KEY']
+    if not secret:
+        return True
+    resp = requests.post(
+        "https://www.google.com/recaptcha/api/siteverify",
+        data={"secret": secret, "response": token, "remoteip": remote_ip}
+    )
+    data = resp.json()
+    return data.get("success", False)
+
 def send_email(to, subject, body):
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    from_email = os.environ.get("FROM_EMAIL")
+    api_key = app.config['SENDGRID_API_KEY']
+    from_email = app.config['FROM_EMAIL']
 
     if not api_key or not from_email:
         print("=== EMAIL (mock) ===")
@@ -127,42 +156,10 @@ def send_email(to, subject, body):
     if response.status_code >= 400:
         print("SENDGRID ERROR:", response.text)
 
-def log_login_attempt(user_id, username_or_email, ip, success):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO login_attempts (user_id, username_or_email, ip_address, timestamp, success)
-        VALUES (?, ?, ?, ?, ?)
-    """, (user_id, username_or_email, ip, datetime.now().isoformat(timespec='seconds'), 1 if success else 0))
-    conn.commit()
-    conn.close()
-
-def parse_datetime(dt_str):
-    if not dt_str:
-        return None
-    try:
-        return datetime.fromisoformat(dt_str)
-    except ValueError:
-        return None
-
-def verify_recaptcha(token, remote_ip):
-    secret = app.config['RECAPTCHA_SECRET_KEY']
-    if not secret:
-        # Якщо не налаштовано — вважаємо, що reCAPTCHA пройдена (для локальної розробки)
-        return True
-    resp = requests.post(
-        "https://www.google.com/recaptcha/api/siteverify",
-        data={"secret": secret, "response": token, "remoteip": remote_ip}
-    )
-    data = resp.json()
-    return data.get("success", False)
-
-# ===== ROUTES =====
 @app.route("/")
 def index():
     return render_template("index.html")
 
-# ----------------------- REGISTER -----------------------
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "GET":
@@ -199,9 +196,13 @@ def register():
     cur = conn.cursor()
     try:
         cur.execute("""
-            INSERT INTO users (email, username, password_hash, is_active, is_2fa_enabled,
-                               failed_logins, lock_until, activation_token)
-            VALUES (?, ?, ?, 0, 0, 0, NULL, ?)
+            INSERT INTO users (
+                email, username, password_hash,
+                is_active, is_2fa_enabled, failed_logins, lock_until,
+                activation_token, reset_token, reset_token_expires_at,
+                oauth_provider, oauth_id, twofa_code, twofa_exp
+            )
+            VALUES (?, ?, ?, 0, 0, 0, NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL)
         """, (email, username, password_hash, activation_token))
         conn.commit()
     except sqlite3.IntegrityError:
@@ -219,7 +220,6 @@ def register():
     flash("Реєстрація успішна. Перевірте email для активації акаунта.", "success")
     return redirect(url_for("login"))
 
-# ----------------------- ACTIVATE -----------------------
 @app.route("/activate")
 def activate():
     token = request.args.get("token", "")
@@ -235,7 +235,6 @@ def activate():
     conn.close()
     return render_template("activate.html", success=True)
 
-# ----------------------- LOGIN -----------------------
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
@@ -284,66 +283,83 @@ def login():
         flash("Невірний пароль.", "danger")
         return render_template("login.html", username_or_email=username_or_email)
 
-    # reset failed logins
     cur.execute("UPDATE users SET failed_logins = 0, lock_until = NULL WHERE id = ?", (user.id,))
     conn.commit()
+
+    if row['is_2fa_enabled']:
+        code = f"{random.randint(100000, 999999)}"
+        twofa_exp = (datetime.now() + timedelta(minutes=5)).isoformat(timespec='seconds')
+
+        cur.execute("UPDATE users SET twofa_code = ?, twofa_exp = ? WHERE id = ?",
+                    (code, twofa_exp, user.id))
+        conn.commit()
+        conn.close()
+
+        session['2fa_user_id'] = user.id
+
+        send_email(user.email, "Ваш 2FA код", f"Ваш код: {code}")
+        flash("Введіть 2FA код, надісланий на ваш email.", "info")
+        return redirect(url_for("two_factor"))
+
     conn.close()
-
-   if user.is_2fa_enabled:
-    code = str(random.randint(100000, 999999))
-    user.twofa_code = code
-    user.twofa_exp = datetime.now() + timedelta(minutes=5)
-    db.session.commit()
-
-    send_email(user.email, "Ваш 2FA код", f"Ваш код: {code}")
-    flash("Введіть 2FA код, який надіслано на email.", "info")
-
-    return redirect(url_for("two_factor"))
-
     login_user(user)
     log_login_attempt(user.id, username_or_email, ip, True)
     flash("Вхід успішний.", "success")
     return redirect(url_for("index"))
 
-# ----------------------- 2FA -----------------------
 @app.route("/2fa", methods=["GET", "POST"])
 def two_factor():
-    if '2fa_user_id' not in session:
+    user_id = session.get("2fa_user_id")
+    if not user_id:
+        flash("Сесія 2FA відсутня. Увійдіть ще раз.", "danger")
         return redirect(url_for("login"))
 
     if request.method == "GET":
         return render_template("two_factor.html")
 
     code = request.form.get("code", "").strip()
-    expected = session.get("2fa_code")
-    expires_str = session.get("2fa_expires")
-    expires_dt = parse_datetime(expires_str)
 
-    if not expected or not expires_dt or expires_dt < datetime.now():
-        flash("2FA код недійсний або прострочений. Увійдіть ще раз.", "danger")
-        session.pop('2fa_user_id', None)
-        session.pop('2fa_code', None)
-        session.pop('2fa_expires', None)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        flash("Користувача не знайдено.", "danger")
+        session.pop("2fa_user_id", None)
         return redirect(url_for("login"))
 
-    if code != expected:
+    stored_code = row['twofa_code']
+    exp_str = row['twofa_exp']
+    exp_dt = parse_datetime(exp_str)
+
+    # прострочено
+    if not stored_code or not exp_dt or exp_dt < datetime.now():
+        cur.execute("UPDATE users SET twofa_code = NULL, twofa_exp = NULL WHERE id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        session.pop("2fa_user_id", None)
+        flash("2FA код прострочений. Увійдіть знову.", "danger")
+        return redirect(url_for("login"))
+
+    if code != stored_code:
+        conn.close()
         flash("Невірний 2FA код.", "danger")
         return render_template("two_factor.html")
 
-    user_id = session['2fa_user_id']
-    user = load_user(user_id)
-    if not user:
-        flash("Помилка користувача. Увійдіть ще раз.", "danger")
-        return redirect(url_for("login"))
+    # код валідний -> очищаємо
+    cur.execute("UPDATE users SET twofa_code = NULL, twofa_exp = NULL WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    session.pop("2fa_user_id", None)
 
+    user = load_user(user_id)
     login_user(user)
-    session.pop('2fa_user_id', None)
-    session.pop('2fa_code', None)
-    session.pop('2fa_expires', None)
+    log_login_attempt(user.id, user.email, request.remote_addr or "unknown", True)
     flash("2FA підтверджено. Вхід успішний.", "success")
     return redirect(url_for("index"))
 
-# ----------------------- PROFILE -----------------------
+# ---------- ПРОФІЛЬ ----------
 @app.route("/profile", methods=["GET", "POST"])
 @login_required
 def profile():
@@ -358,7 +374,7 @@ def profile():
         return redirect(url_for("profile"))
     return render_template("profile.html")
 
-# ----------------------- FORGOT PASSWORD -----------------------
+# ---------- ЗАБУВ ПАРОЛЬ ----------
 @app.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
     if request.method == "GET":
@@ -385,7 +401,6 @@ def forgot_password():
     flash("Якщо такий email існує, інструкції були надіслані.", "info")
     return redirect(url_for("login"))
 
-# ----------------------- RESET PASSWORD -----------------------
 @app.route("/reset-password", methods=["GET", "POST"])
 def reset_password():
     token = request.args.get("token") if request.method == "GET" else request.form.get("token")
@@ -432,7 +447,7 @@ def reset_password():
     flash("Пароль успішно змінено. Увійдіть з новим паролем.", "success")
     return redirect(url_for("login"))
 
-# ----------------------- GOOGLE OAUTH -----------------------
+# ---------- GOOGLE OAUTH ----------
 @app.route("/login/google")
 def login_google():
     if not google:
@@ -446,11 +461,18 @@ def google_callback():
     if not google:
         flash("Google OAuth не налаштовано.", "warning")
         return redirect(url_for("login"))
+
     token = google.authorize_access_token()
-    user_info = google.parse_id_token(token)
+    resp = google.get("userinfo")
+    user_info = resp.json()
+
     email = user_info.get("email")
     sub = user_info.get("sub")
     username = email.split("@")[0] if email else f"user_{sub}"
+
+    if not email:
+        flash("Не вдалося отримати email від Google.", "danger")
+        return redirect(url_for("login"))
 
     conn = get_db()
     cur = conn.cursor()
@@ -461,9 +483,13 @@ def google_callback():
         dummy_password = generate_random_token()
         password_hash = bcrypt.generate_password_hash(dummy_password).decode("utf-8")
         cur.execute("""
-            INSERT INTO users (email, username, password_hash, is_active, is_2fa_enabled,
-                               failed_logins, lock_until, activation_token, oauth_provider, oauth_id)
-            VALUES (?, ?, ?, 1, 0, 0, NULL, NULL, 'google', ?)
+            INSERT INTO users (
+                email, username, password_hash,
+                is_active, is_2fa_enabled, failed_logins, lock_until,
+                activation_token, reset_token, reset_token_expires_at,
+                oauth_provider, oauth_id, twofa_code, twofa_exp
+            )
+            VALUES (?, ?, ?, 1, 0, 0, NULL, NULL, NULL, NULL, 'google', ?, NULL, NULL)
         """, (email, username, password_hash, sub))
         conn.commit()
         cur.execute("SELECT * FROM users WHERE oauth_provider = 'google' AND oauth_id = ?", (sub,))
@@ -475,7 +501,6 @@ def google_callback():
     flash("Вхід через Google успішний.", "success")
     return redirect(url_for("index"))
 
-# ----------------------- ADMIN LOGS -----------------------
 @app.route("/admin/logins")
 @login_required
 def admin_logins():
@@ -492,7 +517,6 @@ def admin_logins():
     conn.close()
     return render_template("admin_logins.html", logs=logs)
 
-# ----------------------- LOGOUT -----------------------
 @app.route("/logout")
 @login_required
 def logout():
