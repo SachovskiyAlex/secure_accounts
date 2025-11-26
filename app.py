@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import requests
 import smtplib
 from email.message import EmailMessage
+import requests
 
 app = Flask(__name__)
 
