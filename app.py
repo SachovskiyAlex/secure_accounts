@@ -95,10 +95,10 @@ def generate_random_token(length=32):
     return ''.join(random.choice(chars) for _ in range(length))
 
 def send_email(to, subject, body):
-    user = app.config['GMAIL_USER']
-    pwd = app.config['GMAIL_APP_PASSWORD']
-    if not user or not pwd:
-        # Fallback: print to console if email not configured
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    from_email = os.environ.get("FROM_EMAIL")
+
+    if not api_key or not from_email:
         print("=== EMAIL (mock) ===")
         print("TO:", to)
         print("SUBJECT:", subject)
@@ -106,16 +106,26 @@ def send_email(to, subject, body):
         print("====================")
         return
 
-    msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = user
-    msg['To'] = to
-    msg.set_content(body)
+    data = {
+        "personalizations": [{
+            "to": [{"email": to}]
+        }],
+        "from": {"email": from_email},
+        "subject": subject,
+        "content": [{
+            "type": "text/plain",
+            "value": body
+        }]
+    }
 
-    with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
-        smtp.starttls()
-        smtp.login(user, pwd)
-        smtp.send_message(msg)
+    response = requests.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        json=data,
+        headers={"Authorization": f"Bearer {api_key}"}
+    )
+
+    if response.status_code >= 400:
+        print("SENDGRID ERROR:", response.text)
 
 def log_login_attempt(user_id, username_or_email, ip, success):
     conn = get_db()
